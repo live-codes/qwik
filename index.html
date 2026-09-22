@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Qwik playground — browser-only proof of concept</title>
+    <style>
+      :root {
+        --bg: #11131a;
+        --panel: #1a1d27;
+        --panel-alt: #222634;
+        --border: #2e3344;
+        --text: #e6e8ef;
+        --muted: #8b93a7;
+        --accent: #18b6f6;
+        --error: #ff6b6b;
+        --warn: #ffc857;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+      }
+
+      header .brand {
+        font-weight: 600;
+      }
+
+      header .brand span {
+        color: var(--accent);
+      }
+
+      header .meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      header .status {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      header .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--warn);
+      }
+
+      header .status.ready .dot {
+        background: #35d07f;
+      }
+
+      header .status.failed .dot {
+        background: var(--error);
+      }
+
+      main {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      }
+
+      @media (max-width: 860px) {
+        main {
+          grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+        }
+      }
+
+      .pane {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .pane + .pane {
+        border-left: 1px solid var(--border);
+      }
+
+      .pane-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .pane-header .spacer {
+        flex: 1;
+      }
+
+      button {
+        font: inherit;
+        font-size: 12px;
+        color: var(--text);
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+      }
+
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #061019;
+        font-weight: 600;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 4px;
+      }
+
+      .tabs button.active {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      textarea {
+        flex: 1;
+        min-height: 0;
+        width: 100%;
+        resize: none;
+        border: 0;
+        outline: none;
+        padding: 14px;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        tab-size: 2;
+      }
+
+      .tab-panel {
+        flex: 1;
+        min-height: 0;
+        display: none;
+      }
+
+      .tab-panel.active {
+        display: flex;
+      }
+
+      iframe {
+        flex: 1;
+        width: 100%;
+        border: 0;
+        background: #fff;
+      }
+
+      pre {
+        flex: 1;
+        min-height: 0;
+        margin: 0;
+        padding: 14px;
+        overflow: auto;
+        font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        white-space: pre;
+      }
+
+      footer {
+        height: 30%;
+        max-height: 240px;
+        min-height: 96px;
+        display: flex;
+        flex-direction: column;
+        border-top: 1px solid var(--border);
+        background: var(--panel);
+      }
+
+      footer .console-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      #console {
+        flex: 1;
+        overflow: auto;
+        padding: 8px 12px;
+        font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      #console .entry {
+        display: flex;
+        gap: 8px;
+        padding: 2px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      #console .tag {
+        flex: none;
+        width: 52px;
+        color: var(--muted);
+      }
+
+      #console .error .tag,
+      #console .error .text {
+        color: var(--error);
+      }
+
+      #console .warn .tag,
+      #console .warn .text {
+        color: var(--warn);
+      }
+
+      #console .info .tag {
+        color: var(--accent);
+      }
+
+      #console .empty {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">Qwik <span>playground</span></div>
+      <div class="meta">proof of concept · compiled in the browser · no server</div>
+      <div class="status" id="status"><span class="dot"></span><span id="status-text">loading compiler…</span></div>
+    </header>
+
+    <main>
+      <section class="pane">
+        <div class="pane-header">
+          <span>src/app.tsx</span>
+          <span class="spacer"></span>
+          <span>ctrl/cmd + enter</span>
+          <button class="primary" id="run">Run</button>
+        </div>
+        <textarea id="editor" spellcheck="false" autocomplete="off"></textarea>
+      </section>
+
+      <section class="pane">
+        <div class="pane-header">
+          <div class="tabs">
+            <button data-tab="result" class="active">Result</button>
+            <button data-tab="compiled">Compiled JS</button>
+          </div>
+        </div>
+        <div class="tab-panel active" data-panel="result">
+          <iframe
+            id="result"
+            title="Qwik result"
+            sandbox="allow-scripts allow-same-origin allow-modals allow-popups allow-forms"
+          ></iframe>
+        </div>
+        <div class="tab-panel" data-panel="compiled">
+          <pre id="compiled"></pre>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="console-head">
+        <span>Console</span>
+        <span class="spacer"></span>
+        <button id="clear">Clear</button>
+      </div>
+      <div id="console"><div class="empty">no output</div></div>
+    </footer>
+
+    <script type="module">
+      /* ===================================================================
+       * 1. Configuration
+       * -------------------------------------------------------------------
+       * The whole point of this PoC: the Qwik compiler *and* the Qwik runtime
+       * are loaded straight from a CDN and run in the browser. Nothing is
+       * compiled or rendered on a server.
+       * ================================================================= */
+
+      const QWIK_VERSION = '1.15.0';
+      const cdnBaseUrl = 'https://cdn.jsdelivr.net/npm/@builder.io/qwik@' + QWIK_VERSION;
+
+      /**
+       * `@builder.io/qwik` and `@builder.io/qwik/jsx-runtime` resolve to the *same*
+       * file (the package maps both to `dist/core.prod.mjs`). Keeping one URL means
+       * one module instance — Qwik keeps module-level state that must not be
+       * duplicated, otherwise signals/containers from the two copies don't match.
+       */
+      const importMap = {
+        imports: {
+          '@builder.io/qwik': cdnBaseUrl + '/dist/core.prod.mjs',
+          '@builder.io/qwik/jsx-runtime': cdnBaseUrl + '/dist/core.prod.mjs',
+          '@builder.io/qwik/build': cdnBaseUrl + '/dist/build/index.prod.mjs',
+          '@builder.io/qwik/preloader': cdnBaseUrl + '/dist/preloader.mjs',
+        },
+      };
+
+      /* ===================================================================
+       * 2. Compiler — the Qwik optimizer (Rust → WASM), running in-browser
+       * -------------------------------------------------------------------
+       * The optimizer is what turns `component$`, `onClick$`, ... into QRLs.
+       * It ships as a wasm module plus a small JS glue file. Note `bindings/*`
+       * is NOT declared in the package `exports` map, so it has to be fetched
+       * by URL rather than imported as a package subpath.
+       * ================================================================= */
+
+      const wasmGlueUrl = cdnBaseUrl + '/bindings/qwik.wasm.mjs';
+      const wasmBinaryUrl = cdnBaseUrl + '/bindings/qwik_wasm_bg.wasm';
+
+      /**
+       * Qwik does not attach per-element DOM listeners. The renderer records the
+       * handlers on the element context (`element._qc_.li`) and publishes the used
+       * event names on `window.qwikevents`; a single global delegate — the
+       * "qwikloader" — reads both and dispatches. Without it nothing is clickable.
+       */
+      const qwikLoaderUrl = cdnBaseUrl + '/dist/qwikloader.js';
+
+      /**
+       * Mirrors `convertOptions()` from `dist/optimizer.mjs` so the raw wasm
+       * binding can be called directly and we skip the optimizer's Node/Deno/Bun
+       * platform detection entirely.
+       */
+      const convertOptions = (options) => {
+        const output = {
+          minify: 'simplify',
+          sourceMaps: false,
+          transpileTs: false,
+          transpileJsx: false,
+          preserveFilenames: false,
+          explicitExtensions: false,
+          mode: 'lib',
+          manualChunks: undefined,
+          scope: undefined,
+          regCtxName: undefined,
+          stripEventHandlers: false,
+          rootDir: undefined,
+          stripExports: undefined,
+          stripCtxName: undefined,
+          isServer: undefined,
+        };
+        for (const [key, value] of Object.entries(options)) {
+          if (value != null) output[key] = value;
+        }
+        output.entryStrategy = options.entryStrategy?.type ?? 'smart';
+        output.manualChunks = options.entryStrategy?.manual ?? undefined;
+        return output;
+      };
+
+      let optimizerPromise;
+
+      const loadOptimizer = () => {
+        optimizerPromise ??= (async () => {
+          const binding = await import(wasmGlueUrl);
+          await binding.default({ module_or_path: wasmBinaryUrl });
+          return binding;
+        })();
+        return optimizerPromise;
+      };
+
+      const formatDiagnostic = (diagnostic) => {
+        const highlight = diagnostic.highlights?.[0];
+        const where = highlight ? highlight.startLine + ':' + highlight.startCol : '';
+        const scope = diagnostic.scope === 'optimizer' ? '' : diagnostic.scope;
+        return (where ? where + ' ' : '') + (scope ? '[' + scope + '] ' : '') + diagnostic.message;
+      };
+
+      const compile = async (code) => {
+        const binding = await loadOptimizer();
+
+        const result = binding.transform_modules(
+          convertOptions({
+            input: [{ path: 'src/app.tsx', code }],
+            srcDir: 'src/',
+            rootDir: '.',
+            // The optimizer defaults to `mode: 'lib'`, which silently leaves `$`
+            // untouched. `'prod'` is what actually rewrites `$` into QRLs.
+            mode: 'prod',
+            isServer: false,
+            transpileTs: true,
+            transpileJsx: true,
+            // `inline` keeps every `$` closure in the same module, so the emitted
+            // code has no relative chunk imports — nothing needs to be fetched to
+            // resolve them, which is exactly what we need without a server.
+            entryStrategy: { type: 'inline' },
+            minify: 'none',
+            sourceMaps: false,
+          }),
+        );
+
+        const diagnostics = result.diagnostics ?? [];
+        const errors = diagnostics.filter((diagnostic) => diagnostic.category !== 'warning');
+        // With the `inline` entry strategy there is exactly one output module.
+        // (`isEntry` is not populated by the optimizer, so don't rely on it.)
+        const entry = result.modules.find((module) => module.isEntry) ?? result.modules[0];
+
+        return {
+          code: errors.length ? '' : entry?.code ?? '',
+          diagnostics: diagnostics.map(formatDiagnostic),
+          errors: errors.map(formatDiagnostic),
+        };
+      };
+
+      /* ===================================================================
+       * 3. Runner — the sandboxed result document
+       * -------------------------------------------------------------------
+       * The compiled module is handed to an iframe that carries its own import
+       * map. It is loaded through a blob URL so the module's `default` export is
+       * readable, no matter how the user wrote it.
+       * ================================================================= */
+
+      /**
+       * Escapes `<` as `\u003C` so arbitrary user code can be embedded in an
+       * inline script without a closing script tag or an HTML comment opener
+       * confusing the HTML parser. Valid in both JS string literals and JSON.
+       */
+      const embedInScript = (json) => json.replace(/</g, '\\u003C');
+
+      const createResultHtml = (compiledCode) => {
+        const runtimeImportMap = embedInScript(JSON.stringify(importMap));
+        const moduleSource = embedInScript(JSON.stringify(compiledCode));
+
+        return [
+          '<!doctype html>',
+          '<html lang="en">',
+          '<head>',
+          '<meta charset="utf-8" />',
+          '<script src="' + qwikLoaderUrl + '"><\/script>',
+          '<script type="importmap">' + runtimeImportMap + '<\/script>',
+          '<style>',
+          'html,body{margin:0;padding:16px;font:15px/1.6 ui-sans-serif,system-ui,sans-serif;color:#1f2430}',
+          'body{background:#fff}',
+          'button{font:inherit;padding:6px 12px;cursor:pointer}',
+          '<\/style>',
+          '</head>',
+          '<body>',
+          '<div id="app"></div>',
+          '<script>',
+          'const send = (type, args) => parent.postMessage({ source: "qwik-poc", type, args }, "*");',
+          'const format = (value) => {',
+          '  if (typeof value === "string") return value;',
+          '  try { return JSON.stringify(value); } catch { return String(value); }',
+          '};',
+          'addEventListener("error", (event) => send("error", [event.message]));',
+          'addEventListener("unhandledrejection", (event) => send("error", [String(event.reason)]));',
+          'for (const level of ["log", "info", "warn", "error"]) {',
+          '  const original = console[level].bind(console);',
+          '  console[level] = (...args) => { send(level, args.map(format)); original(...args); };',
+          '}',
+          '<\/script>',
+          '<script type="module">',
+          'const report = (message) => parent.postMessage({ source: "qwik-poc", type: "error", args: [message] }, "*");',
+          'try {',
+          '  const code = ' + moduleSource + ';',
+          '  const moduleUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));',
+          '  const { render, _jsxC } = await import("@builder.io/qwik");',
+          '  const component = (await import(moduleUrl)).default;',
+          '  if (typeof component !== "function") {',
+          '    throw new Error("The module must `export default` a Qwik component.");',
+          '  }',
+          // `render(el, Component)` would call jsx(Component, null), and Qwik's jsx
+          // reads props.children eagerly, which throws on a null props object.
+          // `_jsxC(Component, null, 3, key)` is exactly what the optimizer emits
+          // for `<Component />` in the output above, so we build the same node.
+          '  await render(document.getElementById("app"), _jsxC(component, null, 3, "lJ_0"));',
+          '  parent.postMessage({ source: "qwik-poc", type: "ready" }, "*");',
+          '} catch (error) {',
+          '  report(error && error.message ? error.message : String(error));',
+          '}',
+          '<\/script>',
+          '</body>',
+          '</html>',
+        ].join('\n');
+      };
+
+      /* ===================================================================
+       * 4. UI
+       * ================================================================= */
+
+      const SAMPLE_CODE = [
+        "import { component$, useSignal } from '@builder.io/qwik';",
+        '',
+        'export default component$(() => {',
+        '  const count = useSignal(0);',
+        '',
+        '  return (',
+        '    <main>',
+        '      <h1>Hello Qwik 👋</h1>',
+        '      <p>This component was compiled in the browser — no server involved.</p>',
+        '      <button onClick$={() => count.value++}>Clicked {count.value} times</button>',
+        '    </main>',
+        '  );',
+        '});',
+        '',
+      ].join('\n');
+
+      const statusEl = document.getElementById('status');
+      const statusTextEl = document.getElementById('status-text');
+      const editorEl = document.getElementById('editor');
+      const resultEl = document.getElementById('result');
+      const compiledEl = document.getElementById('compiled');
+      const consoleEl = document.getElementById('console');
+      const runButton = document.getElementById('run');
+
+      let compiledCode = '';
+      let running = false;
+
+      const setStatus = (state, text) => {
+        statusEl.className = 'status ' + state;
+        statusTextEl.textContent = text;
+      };
+
+      const log = (type, text) => {
+        if (consoleEl.querySelector('.empty')) consoleEl.textContent = '';
+        const entry = document.createElement('div');
+        entry.className = 'entry ' + type;
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = type;
+        const body = document.createElement('span');
+        body.className = 'text';
+        body.textContent = text;
+        entry.append(tag, body);
+        consoleEl.append(entry);
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+      };
+
+      const run = async () => {
+        if (running) return;
+        running = true;
+        runButton.disabled = true;
+        try {
+          const result = await compile(editorEl.value);
+          compiledEl.textContent = result.code || '// compilation failed';
+
+          if (result.errors.length) {
+            setStatus('failed', 'compilation error');
+            for (const error of result.errors) log('error', error);
+            resultEl.srcdoc = '';
+            return;
+          }
+          for (const warning of result.diagnostics.filter((d) => !result.errors.includes(d))) {
+            log('warn', warning);
+          }
+
+          compiledCode = result.code;
+          // Re-assigning `srcdoc` reloads the iframe, so each run starts clean.
+          resultEl.srcdoc = createResultHtml(compiledCode);
+        } catch (error) {
+          setStatus('failed', 'failed to run');
+          log('error', error?.message ?? String(error));
+        } finally {
+          running = false;
+          runButton.disabled = false;
+        }
+      };
+
+      // messages forwarded from the result iframe
+      addEventListener('message', (event) => {
+        const data = event.data;
+        if (!data || data.source !== 'qwik-poc') return;
+        if (data.type === 'ready') return;
+        for (const arg of data.args ?? []) log(data.type, arg);
+      });
+
+      editorEl.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          run();
+        }
+        if (event.key === 'Tab') {
+          event.preventDefault();
+          const { selectionStart, selectionEnd, value } = editorEl;
+          editorEl.value = value.slice(0, selectionStart) + '  ' + value.slice(selectionEnd);
+          editorEl.selectionStart = editorEl.selectionEnd = selectionStart + 2;
+        }
+      });
+
+      runButton.addEventListener('click', run);
+
+      document.getElementById('clear').addEventListener('click', () => {
+        consoleEl.innerHTML = '<div class="empty">no output</div>';
+      });
+
+      for (const tab of document.querySelectorAll('.tabs button')) {
+        tab.addEventListener('click', () => {
+          for (const other of document.querySelectorAll('.tabs button')) {
+            other.classList.toggle('active', other === tab);
+          }
+          for (const panel of document.querySelectorAll('.tab-panel')) {
+            panel.classList.toggle('active', panel.dataset.panel === tab.dataset.tab);
+          }
+        });
+      }
+
+      /* ===================================================================
+       * 5. Boot
+       * ================================================================= */
+
+      editorEl.value = SAMPLE_CODE;
+
+      await loadOptimizer()
+        .then(() => setStatus('ready', 'compiler ready · qwik ' + QWIK_VERSION))
+        .catch((error) => {
+          setStatus('failed', 'compiler failed to load');
+          log('error', error?.message ?? String(error));
+        });
+
+      await run();
+    </script>
+  </body>
+</html>
