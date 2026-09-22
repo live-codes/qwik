@@ -88,10 +88,10 @@
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       }
 
-      @media (max-width: 860px) {
+      @media (max-width: 900px) {
         main {
           grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+          grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
         }
       }
 
@@ -143,6 +143,11 @@
         font-weight: 600;
       }
 
+      button.icon {
+        padding: 2px 7px;
+        line-height: 1.2;
+      }
+
       .tabs {
         display: flex;
         gap: 4px;
@@ -151,6 +156,64 @@
       .tabs button.active {
         border-color: var(--accent);
         color: var(--accent);
+      }
+
+      .files {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        max-height: 38%;
+        overflow: auto;
+      }
+
+      .file {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        border-radius: 5px;
+      }
+
+      .file.active {
+        background: var(--panel-alt);
+      }
+
+      .file input.entry {
+        accent-color: var(--accent);
+        margin: 0 2px;
+        cursor: pointer;
+      }
+
+      .file input.path {
+        flex: 1;
+        min-width: 0;
+        padding: 3px 5px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--text);
+        font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .file.active input.path {
+        color: var(--accent);
+      }
+
+      .file.invalid input.path {
+        color: var(--error);
+      }
+
+      .file input.path:focus {
+        outline: none;
+        border-color: var(--accent);
+        background: var(--bg);
+      }
+
+      .add-file {
+        align-self: flex-start;
+        margin-top: 4px;
       }
 
       textarea {
@@ -195,9 +258,9 @@
       }
 
       footer {
-        height: 30%;
+        height: 28%;
         max-height: 240px;
-        min-height: 96px;
+        min-height: 92px;
         display: flex;
         flex-direction: column;
         border-top: 1px solid var(--border);
@@ -265,11 +328,12 @@
     <main>
       <section class="pane">
         <div class="pane-header">
-          <span>src/app.tsx</span>
+          <span>Project</span>
           <span class="spacer"></span>
           <span>ctrl/cmd + enter</span>
           <button class="primary" id="run">Run</button>
         </div>
+        <div class="files" id="files"></div>
         <textarea id="editor" spellcheck="false" autocomplete="off"></textarea>
       </section>
 
@@ -284,7 +348,7 @@
           <iframe
             id="result"
             title="Qwik result"
-            sandbox="allow-scripts allow-same-origin allow-modals allow-popups allow-forms"
+            sandbox="allow-scripts allow-modals allow-popups allow-forms"
           ></iframe>
         </div>
         <div class="tab-panel" data-panel="compiled">
@@ -306,9 +370,9 @@
       /* ===================================================================
        * 1. Configuration
        * -------------------------------------------------------------------
-       * The whole point of this PoC: the Qwik compiler *and* the Qwik runtime
-       * are loaded straight from a CDN and run in the browser. Nothing is
-       * compiled or rendered on a server.
+       * The Qwik compiler *and* the Qwik runtime are loaded straight from a
+       * CDN and run in the browser. Nothing is compiled or rendered on a
+       * server.
        * ================================================================= */
 
       const QWIK_VERSION = '1.15.0';
@@ -319,6 +383,10 @@
        * file (the package maps both to `dist/core.prod.mjs`). Keeping one URL means
        * one module instance — Qwik keeps module-level state that must not be
        * duplicated, otherwise signals/containers from the two copies don't match.
+       *
+       * These are the only bare specifiers that exist at runtime. Every relative
+       * import between project files is rewritten to a data: URL before it gets
+       * here, so no user module ever needs an import-map entry.
        */
       const importMap = {
         imports: {
@@ -398,12 +466,163 @@
         return (where ? where + ' ' : '') + (scope ? '[' + scope + '] ' : '') + diagnostic.message;
       };
 
-      const compile = async (code) => {
+      /* ===================================================================
+       * 3. Module linking — resolving relative imports without a server
+       * -------------------------------------------------------------------
+       * The optimizer rewrites `$` closures but never bundles modules: with N
+       * input files it emits N (or more) modules that still import each other by
+       * relative path. Something has to resolve those.
+       *
+       * There is no server to serve them and, as in LiveCodes, blob URLs are not
+       * an option: the compiler and the result page live in different origins, so
+       * the compiler cannot mint a URL the result page can fetch. The one URL
+       * form that works everywhere is a `data:` URL — which is exactly what
+       * LiveCodes' `replaceSFCImports` uses for nested Vue/Svelte components.
+       *
+       * So: walk the module graph from the entry, and rewrite every relative
+       * specifier into the data: URL of the module it resolves to. Because a
+       * parent embeds its children, links must be built bottom-up, which means
+       * the graph has to be acyclic.
+       * ================================================================= */
+
+      const toDataUrl = (content, type = 'text/javascript') => {
+        const bytes = new TextEncoder().encode(content);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let index = 0; index < bytes.length; index += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+        }
+        return 'data:' + type + ';charset=UTF-8;base64,' + btoa(binary);
+      };
+
+      // `import … from 'x'`, `export … from 'x'`, `import 'x'`
+      const staticImportPattern = /(\bfrom\s*|\bimport\s*)(["'])([^"'\n]+)\2/g;
+      // `import('x')`
+      const dynamicImportPattern = /(\bimport\s*\(\s*)(["'])([^"'\n]+)\2/g;
+
+      /**
+       * Rewrites every quoted module specifier for which `mapSpecifier` returns a
+       * replacement. Returning `null` leaves the statement untouched. Dynamic
+       * imports are handled first and counted, since they are Qwik's lazy
+       * boundaries.
+       */
+      const rewriteSpecifiers = (code, mapSpecifier) => {
+        let lazy = 0;
+        const replace = (dynamic) => (match, prefix, quote, specifier) => {
+          const replacement = mapSpecifier(specifier, dynamic);
+          if (replacement == null) return match;
+          if (dynamic) lazy++;
+          return prefix + quote + replacement + quote;
+        };
+        const withDynamic = code.replace(dynamicImportPattern, replace(true));
+        const withStatic = withDynamic.replace(staticImportPattern, replace(false));
+        return { code: withStatic, lazy };
+      };
+
+      const SOURCE_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx'];
+
+      /**
+       * The optimizer names its generated chunks after the file they came from
+       * (`src/counter.tsx_Counter_component_9bHJINVHHaU.js`) and copies the file's
+       * relative imports into them, so a resolution failure is usually reported
+       * against a chunk. Map that back to the file the user actually wrote.
+       */
+      const moduleOwner = (modulePath) => {
+        const match = modulePath.match(/^(.*\.(?:tsx|ts|jsx|js))_[^/]*$/);
+        return match ? match[1] : modulePath;
+      };
+
+      const normalizePath = (path) => {
+        const segments = [];
+        for (const segment of path.split('/')) {
+          if (segment === '' || segment === '.') continue;
+          if (segment === '..') segments.pop();
+          else segments.push(segment);
+        }
+        return segments.join('/');
+      };
+
+      const dirname = (path) => path.slice(0, path.lastIndexOf('/'));
+
+      /**
+       * Resolves a relative specifier against the modules the optimizer emitted.
+       * Extensionless specifiers are the norm, and the optimizer renames `.tsx`
+       * inputs to `.js` outputs, so both forms have to be tried.
+       */
+      const resolveRelative = (fromPath, specifier, modulesByPath) => {
+        const base = normalizePath(dirname(fromPath) + '/' + specifier);
+        const candidates = [
+          base,
+          ...SOURCE_EXTENSIONS.map((extension) => base + extension),
+          base.replace(/\.(tsx|ts|jsx)$/, '.js'),
+          ...SOURCE_EXTENSIONS.map((extension) => base + '/index' + extension),
+        ];
+        return candidates.find((candidate) => modulesByPath.has(candidate));
+      };
+
+      /**
+       * Links the emitted modules starting from the entry, returning a single
+       * self-contained entry module plus a report of what resolved to what.
+       */
+      const linkModules = (modules, entryPath) => {
+        const modulesByPath = new Map(modules.map((module) => [module.path, module]));
+        const linked = new Map();
+        const report = new Map();
+        const resolving = [];
+        let lazy = 0;
+
+        const link = (path) => {
+          const cached = linked.get(path);
+          if (cached != null) return cached;
+          if (resolving.includes(path)) {
+            throw new Error('Circular import: ' + [...resolving, path].join(' → '));
+          }
+          const module = modulesByPath.get(path);
+          if (!module) throw new Error('The compiler did not emit a module for ' + path);
+
+          resolving.push(path);
+          const resolutions = [];
+          const mapSpecifier = (specifier) => {
+            if (!specifier.startsWith('.')) {
+              if (specifier in importMap.imports) return null;
+              throw new Error(
+                'Cannot resolve "' + specifier + '" imported by ' + moduleOwner(path) +
+                  ' — only relative files and the Qwik runtime are available.',
+              );
+            }
+            const target = resolveRelative(path, specifier, modulesByPath);
+            if (!target) {
+              throw new Error('Cannot resolve "' + specifier + '" imported by ' + moduleOwner(path));
+            }
+            resolutions.push({ specifier, target });
+            return toDataUrl(link(target));
+          };
+
+          const rewritten = rewriteSpecifiers(module.code, mapSpecifier);
+          lazy += rewritten.lazy;
+          resolving.pop();
+          linked.set(path, rewritten.code);
+          report.set(path, resolutions);
+          return rewritten.code;
+        };
+
+        const entryCode = link(entryPath);
+        return { entryCode, report, moduleCount: linked.size, lazy };
+      };
+
+      /* ===================================================================
+       * 4. Project compilation
+       * ================================================================= */
+
+      /** The optimizer emits `.js` for every input, whatever it was written as. */
+      const toModulePath = (inputPath) => inputPath.replace(/\.(tsx|ts|jsx|mjs)$/, '.js');
+
+      const compile = async (files, entryPath) => {
         const binding = await loadOptimizer();
 
         const result = binding.transform_modules(
           convertOptions({
-            input: [{ path: 'src/app.tsx', code }],
+            input: files.map((file) => ({ path: file.path, code: file.code })),
             srcDir: 'src/',
             rootDir: '.',
             // The optimizer defaults to `mode: 'lib'`, which silently leaves `$`
@@ -412,34 +631,45 @@
             isServer: false,
             transpileTs: true,
             transpileJsx: true,
-            // `inline` keeps every `$` closure in the same module, so the emitted
-            // code has no relative chunk imports — nothing needs to be fetched to
-            // resolve them, which is exactly what we need without a server.
-            entryStrategy: { type: 'inline' },
+            // `smart` is Qwik's default and what a real build uses. It splits each
+            // `$` closure into its own module reached through a dynamic
+            // `import(...)`, so lazy loading survives — the linked output still
+            // imports those chunks lazily, just from data: URLs.
+            entryStrategy: { type: 'smart' },
             minify: 'none',
             sourceMaps: false,
           }),
         );
 
         const diagnostics = result.diagnostics ?? [];
-        const errors = diagnostics.filter((diagnostic) => diagnostic.category !== 'warning');
-        // With the `inline` entry strategy there is exactly one output module.
-        // (`isEntry` is not populated by the optimizer, so don't rely on it.)
-        const entry = result.modules.find((module) => module.isEntry) ?? result.modules[0];
+        const errors = diagnostics
+          .filter((diagnostic) => diagnostic.category !== 'warning')
+          .map(formatDiagnostic);
+        if (errors.length) return { errors, entryCode: '', modules: [] };
 
-        return {
-          code: errors.length ? '' : entry?.code ?? '',
-          diagnostics: diagnostics.map(formatDiagnostic),
-          errors: errors.map(formatDiagnostic),
-        };
+        const modules = result.modules.map((module) => ({ path: module.path, code: module.code }));
+        try {
+          const linked = linkModules(modules, toModulePath(entryPath));
+          return {
+            entryCode: linked.entryCode,
+            errors: [],
+            warnings: [],
+            modules,
+            report: linked.report,
+            moduleCount: linked.moduleCount,
+            lazy: linked.lazy,
+          };
+        } catch (error) {
+          return { errors: [error.message], modules };
+        }
       };
 
       /* ===================================================================
-       * 3. Runner — the sandboxed result document
+       * 5. Runner — the sandboxed result document
        * -------------------------------------------------------------------
-       * The compiled module is handed to an iframe that carries its own import
-       * map. It is loaded through a blob URL so the module's `default` export is
-       * readable, no matter how the user wrote it.
+       * The linked entry is handed to an iframe that carries its own import map.
+       * The entry is imported by URL so its `default` export is readable, no
+       * matter how the user wrote it.
        * ================================================================= */
 
       /**
@@ -449,9 +679,9 @@
        */
       const embedInScript = (json) => json.replace(/</g, '\\u003C');
 
-      const createResultHtml = (compiledCode) => {
+      const createResultHtml = (entryCode) => {
         const runtimeImportMap = embedInScript(JSON.stringify(importMap));
-        const moduleSource = embedInScript(JSON.stringify(compiledCode));
+        const entryUrl = embedInScript(JSON.stringify(toDataUrl(entryCode)));
 
         return [
           '<!doctype html>',
@@ -484,17 +714,15 @@
           '<script type="module">',
           'const report = (message) => parent.postMessage({ source: "qwik-poc", type: "error", args: [message] }, "*");',
           'try {',
-          '  const code = ' + moduleSource + ';',
-          '  const moduleUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));',
           '  const { render, _jsxC } = await import("@builder.io/qwik");',
-          '  const component = (await import(moduleUrl)).default;',
+          '  const component = (await import(' + entryUrl + ')).default;',
           '  if (typeof component !== "function") {',
-          '    throw new Error("The module must `export default` a Qwik component.");',
+          '    throw new Error("The entry file must `export default` a Qwik component.");',
           '  }',
           // `render(el, Component)` would call jsx(Component, null), and Qwik's jsx
           // reads props.children eagerly, which throws on a null props object.
           // `_jsxC(Component, null, 3, key)` is exactly what the optimizer emits
-          // for `<Component />` in the output above, so we build the same node.
+          // for `<Component />` in the compiled output, so we build the same node.
           '  await render(document.getElementById("app"), _jsxC(component, null, 3, "lJ_0"));',
           '  parent.postMessage({ source: "qwik-poc", type: "ready" }, "*");',
           '} catch (error) {',
@@ -507,35 +735,87 @@
       };
 
       /* ===================================================================
-       * 4. UI
+       * 6. UI — a tiny multi-file project
        * ================================================================= */
 
-      const SAMPLE_CODE = [
-        "import { component$, useSignal } from '@builder.io/qwik';",
-        '',
-        'export default component$(() => {',
-        '  const count = useSignal(0);',
-        '',
-        '  return (',
-        '    <main>',
-        '      <h1>Hello Qwik 👋</h1>',
-        '      <p>This component was compiled in the browser — no server involved.</p>',
-        '      <button onClick$={() => count.value++}>Clicked {count.value} times</button>',
-        '    </main>',
-        '  );',
-        '});',
-        '',
-      ].join('\n');
+      const STARTER_PROJECT = [
+        {
+          path: 'src/app.tsx',
+          code: [
+            "import { component$ } from '@builder.io/qwik';",
+            "import { Counter } from './counter';",
+            '',
+            'export default component$(() => {',
+            '  return (',
+            '    <main>',
+            '      <h1>Multi-file Qwik</h1>',
+            '      <p>Three files, compiled and linked in the browser — no server.</p>',
+            '      <Counter label="first" />',
+            '      <Counter label="second" />',
+            '    </main>',
+            '  );',
+            '});',
+            '',
+          ].join('\n'),
+        },
+        {
+          path: 'src/counter.tsx',
+          code: [
+            "import { component$, useSignal } from '@builder.io/qwik';",
+            "import { Label } from './components/label';",
+            '',
+            'export const Counter = component$((props: { label: string }) => {',
+            '  const count = useSignal(0);',
+            '',
+            '  return (',
+            '    <p>',
+            '      <Label text={props.label} /> — {count.value}',
+            '      <button onClick$={() => count.value++}>+1</button>',
+            '    </p>',
+            '  );',
+            '});',
+            '',
+          ].join('\n'),
+        },
+        {
+          path: 'src/components/label.tsx',
+          code: [
+            "import { component$ } from '@builder.io/qwik';",
+            '',
+            'export const Label = component$((props: { text: string }) => {',
+            '  return <strong>{props.text}</strong>;',
+            '});',
+            '',
+          ].join('\n'),
+        },
+      ];
+
+      const NEW_FILE_TEMPLATE = (name) =>
+        [
+          "import { component$ } from '@builder.io/qwik';",
+          '',
+          'export const ' +
+            name +
+            ' = component$(() => {',
+          '  return <div>' +
+            name +
+            '</div>;',
+          '});',
+          '',
+        ].join('\n');
 
       const statusEl = document.getElementById('status');
       const statusTextEl = document.getElementById('status-text');
+      const filesEl = document.getElementById('files');
       const editorEl = document.getElementById('editor');
       const resultEl = document.getElementById('result');
       const compiledEl = document.getElementById('compiled');
       const consoleEl = document.getElementById('console');
       const runButton = document.getElementById('run');
 
-      let compiledCode = '';
+      let files = STARTER_PROJECT.map((file) => ({ ...file }));
+      let entryIndex = 0;
+      let activeIndex = 0;
       let running = false;
 
       const setStatus = (state, text) => {
@@ -551,11 +831,128 @@
         tag.className = 'tag';
         tag.textContent = type;
         const body = document.createElement('span');
-        body.className = 'text';
+        body.className = 'body';
         body.textContent = text;
         entry.append(tag, body);
         consoleEl.append(entry);
         consoleEl.scrollTop = consoleEl.scrollHeight;
+      };
+
+      /** Copies the textarea back into the model before any file switch. */
+      const stashEditor = () => {
+        const file = files[activeIndex];
+        if (file) file.code = editorEl.value;
+      };
+
+      const renderFiles = () => {
+        filesEl.textContent = '';
+        files.forEach((file, index) => {
+          const row = document.createElement('div');
+          row.className = 'file' + (index === activeIndex ? ' active' : '');
+
+          const entryPicker = document.createElement('input');
+          entryPicker.type = 'radio';
+          entryPicker.className = 'entry';
+          entryPicker.name = 'entry';
+          entryPicker.checked = index === entryIndex;
+          entryPicker.title = 'entry file';
+          entryPicker.addEventListener('change', () => {
+            entryIndex = index;
+            renderFiles();
+          });
+
+          const pathInput = document.createElement('input');
+          pathInput.className = 'path';
+          pathInput.value = file.path;
+          pathInput.spellcheck = false;
+          pathInput.addEventListener('focus', () => selectFile(index));
+          pathInput.addEventListener('change', () => {
+            const next = pathInput.value.trim();
+            if (next && files.some((other, i) => i !== index && other.path === next)) {
+              row.classList.add('invalid');
+              return;
+            }
+            row.classList.remove('invalid');
+            files[index].path = next || files[index].path;
+            renderFiles();
+          });
+
+          const remove = document.createElement('button');
+          remove.className = 'icon';
+          remove.type = 'button';
+          remove.textContent = '×';
+          remove.title = 'remove file';
+          remove.disabled = files.length < 2;
+          remove.addEventListener('click', () => {
+            if (files.length < 2) return;
+            files.splice(index, 1);
+            if (entryIndex >= files.length) entryIndex = 0;
+            if (activeIndex >= files.length) activeIndex = files.length - 1;
+            selectFile(activeIndex);
+            renderFiles();
+          });
+
+          row.append(entryPicker, pathInput, remove);
+          filesEl.append(row);
+        });
+
+        const add = document.createElement('button');
+        add.className = 'add-file';
+        add.type = 'button';
+        add.textContent = '+ Add file';
+        add.addEventListener('click', () => {
+          stashEditor();
+          const index = files.length + 1;
+          const name = 'Component' + index;
+          files.push({ path: 'src/component' + index + '.tsx', code: NEW_FILE_TEMPLATE(name) });
+          activeIndex = files.length - 1;
+          editorEl.value = files[activeIndex].code;
+          renderFiles();
+        });
+        filesEl.append(add);
+      };
+
+      const selectFile = (index) => {
+        if (index === activeIndex) return;
+        stashEditor();
+        activeIndex = index;
+        editorEl.value = files[index]?.code ?? '';
+        renderFiles();
+      };
+
+      const validateProject = () => {
+        const errors = [];
+        const seen = new Set();
+        for (const file of files) {
+          if (!/\.(tsx|ts|jsx|js)$/.test(file.path)) {
+            errors.push('"' + file.path + '" needs a .tsx, .ts, .jsx or .js extension.');
+          } else if (!file.path.startsWith('src/')) {
+            errors.push('"' + file.path + '" must live under src/.');
+          }
+          if (seen.has(file.path)) errors.push('Duplicate file "' + file.path + '".');
+          seen.add(file.path);
+        }
+        return errors;
+      };
+
+      const renderCompiled = (modules, report) => {
+        if (!modules?.length) {
+          compiledEl.textContent = '// compilation failed';
+          return;
+        }
+        const parts = [];
+        parts.push('// ' + modules.length + ' module(s) emitted by the optimizer.');
+        parts.push('// Relative imports are resolved to data: URLs of the linked module.');
+        for (const module of modules) {
+          parts.push('', '// ' + '='.repeat(76), '// ' + module.path, '// ' + '='.repeat(76));
+          const resolutions = report?.get(module.path) ?? [];
+          for (const { specifier, target } of resolutions) {
+            parts.push('//   ' + specifier + '  →  ' + target);
+          }
+          parts.push('');
+          parts.push(module.code);
+        }
+        compiledEl.textContent = parts.join('\n');
       };
 
       const run = async () => {
@@ -563,22 +960,38 @@
         running = true;
         runButton.disabled = true;
         try {
-          const result = await compile(editorEl.value);
-          compiledEl.textContent = result.code || '// compilation failed';
+          stashEditor();
+
+          const invalid = validateProject();
+          if (invalid.length) {
+            setStatus('failed', 'invalid project');
+            for (const message of invalid) log('error', message);
+            return;
+          }
+
+          const result = await compile(files, files[entryIndex].path);
+          renderCompiled(result.modules, result.report);
 
           if (result.errors.length) {
-            setStatus('failed', 'compilation error');
-            for (const error of result.errors) log('error', error);
+            setStatus('failed', result.errors.length > 1 ? 'errors' : 'error');
+            for (const message of result.errors) log('error', message);
             resultEl.srcdoc = '';
             return;
           }
-          for (const warning of result.diagnostics.filter((d) => !result.errors.includes(d))) {
-            log('warn', warning);
-          }
 
-          compiledCode = result.code;
+          setStatus('ready', 'compiler ready · qwik ' + QWIK_VERSION);
+          log(
+            'info',
+            'compiled ' +
+              files.length +
+              ' file(s) → ' +
+              result.moduleCount +
+              ' module(s), ' +
+              result.lazy +
+              ' lazy',
+          );
           // Re-assigning `srcdoc` reloads the iframe, so each run starts clean.
-          resultEl.srcdoc = createResultHtml(compiledCode);
+          resultEl.srcdoc = createResultHtml(result.entryCode);
         } catch (error) {
           setStatus('failed', 'failed to run');
           log('error', error?.message ?? String(error));
@@ -627,10 +1040,11 @@
       }
 
       /* ===================================================================
-       * 5. Boot
+       * 7. Boot
        * ================================================================= */
 
-      editorEl.value = SAMPLE_CODE;
+      editorEl.value = files[activeIndex].code;
+      renderFiles();
 
       await loadOptimizer()
         .then(() => setStatus('ready', 'compiler ready · qwik ' + QWIK_VERSION))
